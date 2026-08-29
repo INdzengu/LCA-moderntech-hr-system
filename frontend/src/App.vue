@@ -1,28 +1,22 @@
 <template>
   <div class="app-container">
-    <!-- LOGIN VIEW: Shows when user is not authenticated -->
     <LoginView
       v-if="!isLoggedIn"
       @login-success="handleSuccessfulAuthentication"
     />
 
-    <!-- MAIN APPLICATION SHELL: Shows when user is logged in -->
     <div v-else>
-      <!-- NAVIGATION BAR: Sticky header with logo and menu links -->
       <nav class="top-nav">
-        <!-- LOGO SECTION: Company branding with glowing dot accent -->
         <div class="logo">
           <div class="logo-dot"></div>
           <span>ModernTech Solutions</span>
         </div>
 
-        <!-- HAMBURGER MENU: Mobile-only toggle button for navigation -->
         <button class="hamburger-menu" @click="mobileNavOpen = !mobileNavOpen">
           ☰
         </button>
 
-        <!-- DESKTOP NAVIGATION: Navigation links shown on screens wider than 768px -->
-        <!-- Links are dynamically highlighted based on currentView data property -->
+        <!-- Dynamic Navigation Links Based on User Role -->
         <div class="nav-links-desktop">
           <a
             href="#"
@@ -48,135 +42,81 @@
             @click.prevent="currentView = 'leave'"
             >Leave</a
           >
+
+          <!-- Payroll: Visible to Admin and HR Staff only -->
           <a
+            v-if="userRole === 'admin' || userRole === 'hr_staff'"
             href="#"
             :class="{ 'active-link': currentView === 'Payroll' }"
             @click.prevent="currentView = 'Payroll'"
             >Payroll</a
           >
+
+          <!-- Settings: Visible to Admin only -->
           <a
+            v-if="userRole === 'admin'"
             href="#"
-            :class="{ 'active-link': currentView === 'Settings' }"
+            :class="{ 'active-link': currentView === 'settings' }"
             @click.prevent="currentView = 'settings'"
             >Settings</a
           >
         </div>
 
-        <!-- MOBILE NAVIGATION: Dropdown menu that appears when hamburger is clicked on mobile -->
-        <!-- Uses v-show to toggle visibility based on mobileNavOpen boolean -->
-        <!-- Closes after navigation by calling toggleMobileNav() -->
-        <div v-show="mobileNavOpen" class="nav-links-mobile">
-          <a
-            href="#"
-            :class="{ 'active-link': currentView === 'dashboard' }"
-            @click.prevent="
-              toggleMobileNav();
-              currentView = 'dashboard';
-            "
-            >Dashboard</a
-          >
-          <a
-            href="#"
-            :class="{ 'active-link': currentView === 'people' }"
-            @click.prevent="
-              toggleMobileNav();
-              currentView = 'people';
-            "
-            >People</a
-          >
-          <a
-            href="#"
-            :class="{ 'active-link': currentView === 'Calendar' }"
-            @click.prevent="
-              toggleMobileNav();
-              currentView = 'Calendar';
-            "
-            >Calendar</a
-          >
-          <a
-            href="#"
-            :class="{ 'active-link': currentView === 'leave' }"
-            @click.prevent="
-              toggleMobileNav();
-              currentView = 'leave';
-            "
-            >Leave</a
-          >
-          <a
-            href="#"
-            :class="{ 'active-link': currentView === 'Payroll' }"
-            @click.prevent="
-              toggleMobileNav();
-              currentView = 'Payroll';
-            "
-            >Payroll</a
-          >
-          <a
-            href="#"
-            :class="{ 'active-link': currentView === 'Settings' }"
-            @click.prevent="
-              toggleMobileNav();
-              currentView = 'settings';
-            "
-            >Settings</a
-          >
-        </div>
-
-        <!-- USER SECTION: Displays current user name and logout button -->
         <div class="user-section">
-          <span class="user-name">{{ currentUser }}</span>
+          <div class="user-info">
+            <span class="user-name">{{ currentUser }}</span>
+            <span class="user-role-badge" :class="userRole">{{
+              userRoleLabel
+            }}</span>
+          </div>
           <button class="logout-btn" @click="executeSystemLogout">
             Logout
           </button>
         </div>
       </nav>
 
-      <!-- PAGE CONTENT: Dynamic content area that switches between different views -->
-      <!-- The view displayed depends on the currentView data property value -->
-      <!-- All views receive the same employees array from central state (App.vue) -->
       <main class="page-content">
-        <!-- DASHBOARD VIEW: Shows summary stats, charts, and activity logs -->
         <DashboardView
           v-if="currentView === 'dashboard'"
-          :employees="employees"
+          :employees="filteredEmployees"
           :currentUser="currentUser"
+          :userRole="userRole"
         />
-
-        <!-- PEOPLE VIEW: Shows employee directory with search and filter functionality -->
         <PeopleView
           v-else-if="currentView === 'people'"
-          :employees="employees"
+          :employees="filteredEmployees"
           :currentUser="currentUser"
+          :userRole="userRole"
+          @refresh-data="fetchEmployees"
         />
-
-        <!-- LEAVE VIEW: Manages leave requests with approval/rejection functionality -->
         <LeaveView
           v-else-if="currentView === 'leave'"
           :currentUser="currentUser"
-          :employees="employees"
+          :employees="filteredEmployees"
+          :userRole="userRole"
+          @refresh-data="fetchEmployees"
         />
-
-        <!-- CALENDAR VIEW: Displays attendance heatmap and tracking -->
         <CalendarView
           v-else-if="currentView === 'Calendar'"
-          :employees="employees"
+          :employees="filteredEmployees"
           :currentUser="currentUser"
+          :userRole="userRole"
         />
-
-        <!-- PAYROLL VIEW: Shows salary calculations and payslip generation -->
         <PayrollView
-          v-else-if="currentView === 'Payroll'"
+          v-else-if="
+            currentView === 'Payroll' &&
+            (userRole === 'admin' || userRole === 'hr_staff')
+          "
           :currentUser="currentUser"
-          :employees="employees"
+          :employees="filteredEmployees"
+          :userRole="userRole"
         />
-
-        <!-- SETTINGS VIEW: Configuration panel for company info and preferences -->
         <SettingsView
-          v-else-if="currentView === 'settings'"
+          v-else-if="currentView === 'settings' && userRole === 'admin'"
           :currentUser="currentUser"
+          :userRole="userRole"
         />
       </main>
-
       <!-- FOOTER: Site information and quick links -->
       <footer class="app-footer">
         <!-- FOOTER CONTENT GRID: Multi-column layout with company info and links -->
@@ -244,7 +184,7 @@
 </template>
 
 <script>
-// COMPONENT IMPORTS: Import all view components that make up the SPA
+import axios from "axios";
 import LoginView from "./components/LoginView.vue";
 import DashboardView from "./components/DashboardView.vue";
 import PeopleView from "./components/PeopleView.vue";
@@ -253,14 +193,8 @@ import PayrollView from "./components/PayrollView.vue";
 import CalendarView from "./components/CalendarView.vue";
 import SettingsView from "./components/SettingsView.vue";
 
-// CENTRAL DATA SOURCE: Import dummy employee data from JSON file
-// This is imported once and used throughout the app via props to child components
-import employeeData from "./data/employees.json";
-
 export default {
   name: "App",
-
-  // COMPONENT REGISTRATION: Register all child components
   components: {
     LoginView,
     DashboardView,
@@ -273,109 +207,97 @@ export default {
 
   data() {
     return {
-      // AUTHENTICATION STATE: Controls whether login screen or main app is shown
       isLoggedIn: false,
-
-      // CURRENT USER: Stores the logged-in user's name (hardcoded for proof of concept)
-      currentUser: "HR Admin",
-
-      // CURRENT VIEW: Controls which component is displayed in the page-content area
-      // Values: 'dashboard', 'people', 'leave', 'Calendar', 'Payroll', 'settings'
+      currentUser: "",
+      userRole: "", // 'admin', 'hr_staff', or 'manager'
       currentView: "dashboard",
-
-      // CENTRAL STATE - EMPLOYEE DATA: Single source of truth for all employee information
-      // All child components receive this data via props and cannot modify it directly
-      // Changes to employees trigger the watcher which saves to localStorage
       employees: [],
-
-      // MOBILE NAVIGATION STATE: Controls visibility of mobile menu dropdown
-      // Set to false when user clicks a navigation link (via toggleMobileNav method)
       mobileNavOpen: false,
+      apiBaseUrl: "http://localhost:8000",
     };
   },
 
-  // WATCHERS: Monitor data changes and trigger side effects
-  watch: {
-    // DEEP WATCH ON EMPLOYEES ARRAY: Triggers whenever any employee data changes
-    // This includes nested properties like leave requests or attendance records
-    // Calls saveEmployeeDataToStorage to persist changes to localStorage
-    employees: {
-      handler(newVal) {
-        this.saveEmployeeDataToStorage();
-      },
-      deep: true,
+  computed: {
+    userRoleLabel() {
+      const labels = {
+        admin: "Admin",
+        hr_staff: "HR Staff",
+        manager: "Manager",
+      };
+      return labels[this.userRole] || this.userRole;
+    },
+
+    // Managers only see employees in their team; Admin & HR see all
+    filteredEmployees() {
+      if (this.userRole === "manager") {
+        return this.employees.filter(
+          (emp) => emp.manager_email === this.currentUser,
+        );
+      }
+      return this.employees;
     },
   },
 
-  // LIFECYCLE HOOK: Runs when component is created but not yet rendered
-  // Used to initialize employee data from localStorage or JSON file
   created() {
-    this.initializeEmployeeData();
+    this.checkExistingSession();
   },
 
   methods: {
-    // INITIALIZE EMPLOYEE DATA: Called on app startup (in created hook)
-    // Priority: Try localStorage first (for persistence), then fall back to imported JSON
-    // This ensures employee data survives page refreshes
-    initializeEmployeeData() {
-      // Check if employee data exists in browser's localStorage
-      const savedEmployees = localStorage.getItem("moderntech_employees");
+    checkExistingSession() {
+      const token = localStorage.getItem("authToken");
+      const savedUser = localStorage.getItem("currentUser");
+      const savedRole = localStorage.getItem("userRole");
 
-      if (savedEmployees) {
-        try {
-          // Parse and load previously saved employee data from localStorage
-          this.employees = JSON.parse(savedEmployees);
-        } catch (error) {
-          // If localStorage data is corrupted, log error and use imported JSON instead
-          console.error("Error loading saved employee data:", error);
-          this.employees = JSON.parse(JSON.stringify(employeeData));
-        }
-      } else {
-        // First time loading app: use imported JSON employee data
-        // JSON.parse(JSON.stringify()) creates a deep copy to avoid reference issues
-        this.employees = JSON.parse(JSON.stringify(employeeData));
+      if (token && savedUser && savedRole) {
+        this.isLoggedIn = true;
+        this.currentUser = savedUser;
+        this.userRole = savedRole;
+        this.fetchEmployees();
       }
     },
 
-    // SAVE EMPLOYEE DATA TO STORAGE: Persists employee array to browser's localStorage
-    // Called automatically by the watcher whenever employees data changes
-    // This makes changes permanent - they survive page refreshes
-    saveEmployeeDataToStorage() {
+    async fetchEmployees() {
       try {
-        // Convert employees array to JSON string and save to localStorage
-        localStorage.setItem(
-          "moderntech_employees",
-          JSON.stringify(this.employees),
+        const response = await axios.get(
+          "http://localhost/lca-php/moderntech-hr-system/backend/routes/employees.php",
+          { withCredentials: true },
         );
+        this.employees = response.data;
       } catch (error) {
-        // Log error if localStorage is full or unavailable
-        console.error("Error saving employee data to localStorage:", error);
+        console.error("API Fetch Error:", error);
       }
     },
-
-    // TOGGLE MOBILE NAVIGATION: Closes the mobile menu after user clicks a link
-    // Used in mobile navigation to hide the dropdown after navigation
-    toggleMobileNav() {
-      this.mobileNavOpen = false;
-    },
-
-    // HANDLE SUCCESSFUL AUTHENTICATION: Called when user logs in successfully
-    // Sets authentication state to true, sets user name, and shows dashboard
-    handleSuccessfulAuthentication() {
-      this.isLoggedIn = true;
-      this.currentUser = "HR Admin";
-      this.currentView = "dashboard";
-    },
-
-    // EXECUTE SYSTEM LOGOUT: Called when user clicks logout button
-    // Sets authentication state to false, which shows login screen again
     executeSystemLogout() {
+      localStorage.removeItem("authToken");
+      localStorage.removeItem("currentUser");
+      localStorage.removeItem("userRole");
+      localStorage.removeItem("isLoggedIn");
+      localStorage.removeItem("moderntech_session_user");
       this.isLoggedIn = false;
+      this.currentUser = "";
+      this.userRole = "";
+      this.employees = [];
+    },
+    handleSuccessfulAuthentication(userData) {
+      this.isLoggedIn = true;
+      this.currentUser = userData.email;
+      this.userRole = userData.role;
+      this.currentView = "dashboard";
+      this.fetchEmployees();
+    },
+
+    executeSystemLogout() {
+      localStorage.removeItem("authToken");
+      localStorage.removeItem("currentUser");
+      localStorage.removeItem("userRole");
+      this.isLoggedIn = false;
+      this.currentUser = "";
+      this.userRole = "";
+      this.employees = [];
     },
   },
 };
 </script>
-
 <style>
 /* GLOBAL STYLES: Applied to entire page */
 * {
@@ -695,6 +617,95 @@ html {
   }
 
   /* Footer padding on mobile */
+  .app-footer {
+    padding: 30px 15px 15px;
+  }
+}
+/* FOOTER: Site footer with company info and links */
+.app-footer {
+  background: linear-gradient(135deg, #0a2818 0%, #051409 100%);
+  border-top: 2px solid #44ff9a;
+  color: #b8b8b8;
+  margin-top: 50px;
+  padding: 40px 30px 20px;
+  font-size: 0.9rem;
+}
+
+/* FOOTER CONTENT GRID: Multi-column layout for footer sections */
+.footer-content {
+  max-width: 1400px;
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 30px;
+  margin-bottom: 30px;
+}
+
+/* FOOTER SECTION: Individual column in footer with heading and content */
+.footer-section h4 {
+  color: #44ff9a;
+  margin-bottom: 15px;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.footer-section p {
+  color: #888888;
+  line-height: 1.6;
+}
+
+/* FOOTER LINKS: Styled list of links with hover effects */
+.footer-section ul {
+  list-style: none;
+}
+
+.footer-section ul li {
+  margin-bottom: 10px;
+}
+
+.footer-section ul li a {
+  color: #b8b8b8;
+  text-decoration: none;
+  transition: color 0.3s ease;
+}
+
+.footer-section ul li a:hover {
+  color: #44ff9a;
+  text-shadow: 0 0 8px rgba(68, 255, 154, 0.3);
+}
+
+/* FOOTER BOTTOM: Copyright and version info */
+.footer-bottom {
+  border-top: 1px solid #1a3a1a;
+  padding-top: 20px;
+  text-align: center;
+  color: #666666;
+  font-size: 0.85rem;
+}
+
+.footer-bottom p {
+  margin: 5px 0;
+}
+
+.version-info {
+  color: #555555;
+  font-size: 0.8rem;
+}
+
+/* RESPONSIVE FOOTER STYLES */
+@media (max-width: 768px) {
+  .footer-content {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 20px;
+    padding: 0 10px;
+  }
+}
+
+@media (max-width: 480px) {
+  .footer-content {
+    grid-template-columns: 1fr;
+  }
+
   .app-footer {
     padding: 30px 15px 15px;
   }

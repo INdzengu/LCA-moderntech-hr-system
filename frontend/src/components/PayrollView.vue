@@ -155,7 +155,45 @@
               </p>
             </div>
           </div>
-
+          <div class="salary-history-section">
+            <div class="dashed-section-heading">SALARY INCREMENT HISTORY</div>
+            <div
+              v-if="
+                selectedEmployee.history && selectedEmployee.history.length > 0
+              "
+              class="history-list"
+            >
+              <div
+                v-for="record in selectedEmployee.history"
+                :key="record.id"
+                class="history-item"
+              >
+                <div class="history-main-info">
+                  <span class="history-date">{{
+                    formatDate(record.effective_date)
+                  }}</span>
+                  <span class="history-reason">{{ record.reason }}</span>
+                </div>
+                <div class="history-amounts">
+                  <span class="history-old" v-if="record.old_salary">
+                    R{{ Number(record.old_salary).toLocaleString() }} &rarr;
+                  </span>
+                  <span class="history-new accent-green">
+                    R{{ Number(record.new_salary).toLocaleString() }}
+                  </span>
+                  <span
+                    class="history-badge"
+                    v-if="record.increase_percentage > 0"
+                  >
+                    +{{ record.increase_percentage }}%
+                  </span>
+                </div>
+              </div>
+            </div>
+            <div v-else class="history-empty">
+              No historical adjustments recorded.
+            </div>
+          </div>
           <!-- PAYSLIP DATA ROWS: Salary and deduction calculations -->
           <div class="payslip-data-rows">
             <!-- GROSS SALARY ROW -->
@@ -291,414 +329,258 @@
     </div>
   </div>
 </template>
-
 <script>
+import axios from "axios";
+
 export default {
   name: "PayrollView",
-
-  props: {
-    // CURRENT USER: Name of logged-in HR staff member
-    currentUser: {
-      type: String,
-      default: "HR Admin",
-    },
-
-    // EMPLOYEES: Central data source with all employee information
-    // Passed from App.vue - contains all employee salary data
-    employees: {
-      type: Array,
-      required: true,
-    },
-  },
-
   data() {
     return {
-      // searchQuery: Stores text user types in search field
-      // Used to filter employee list by name or role
-      searchQuery: "",
-
-      // selectedEmployee: Stores the currently selected employee
-      // Set when user clicks an employee from the left panel
-      // Null when no employee is selected
+      employees: [],
       selectedEmployee: null,
-
-      // salaryIncreasePercentage: Stores the percentage entered by user
-      // Used in salary increase simulation (e.g., 5 for 5% increase)
+      searchQuery: "",
       salaryIncreasePercentage: null,
-
-      // successMessage: Stores success notification text
-      // Shows when salary update completes successfully
-      // Empty string means no message to display
-      successMessage: "",
-
-      // errorMessage: Stores error notification text
-      // Shows validation errors or operation failures
-      // Empty string means no error
-      errorMessage: "",
-
-      // isProcessing: Boolean for processing state
-      // true = button disabled, shows "Processing..."
-      // false = button enabled, shows normal text
       isProcessing: false,
+      successMessage: "",
+      errorMessage: "",
+      activeTab: "overview",
     };
   },
 
   computed: {
-    /**
-     * FILTERED EMPLOYEES: Employee list filtered by search query
-     *
-     * WHAT IT DOES: Returns only employees matching the search term
-     * USED FOR: Populates the left panel employee list
-     *
-     * HOW IT WORKS:
-     *   1. Check if searchQuery is empty (if so, return all employees)
-     *   2. Filter employees where name OR role matches search (case-insensitive)
-     *   3. Return filtered array
-     *
-     * EXAMPLE:
-     * If search = "developer", shows only employees with "developer" in name/role
-     * If search = empty, shows all employees
-     */
     filteredEmployees() {
-      if (!this.employees) return [];
+      if (!this.searchQuery) return this.employees;
+      const query = this.searchQuery.toLowerCase();
       return this.employees.filter((emp) => {
-        const query = this.searchQuery ? this.searchQuery.toLowerCase() : "";
         return (
-          (emp.name && emp.name.toLowerCase().includes(query)) ||
+          emp.name?.toLowerCase().includes(query) ||
+          (emp.department && emp.department.toLowerCase().includes(query)) ||
           (emp.role && emp.role.toLowerCase().includes(query))
         );
       });
     },
 
-    /**
-     * TOTAL COMPANY DEDUCTIONS: Sum of all employee deductions
-     *
-     * WHAT IT DOES: Calculates total deductions across all employees
-     * USED FOR: Summary card showing total company deductions
-     *
-     * HOW IT WORKS:
-     *   1. Loop through all employees
-     *   2. For each employee, calculate their total deductions
-     *   3. Add to running total (accumulator)
-     *   4. Return sum
-     *
-     * FORMULA: Sum of (UIF + PAYE + Pension + Medical) for all employees
-     */
-    totalCompanyDeductions() {
-      return this.employees.reduce(
-        (total, employee) =>
-          total + this.calculateTotalDeductions(employee.monthlySalary || 0),
-        0,
-      );
-    },
-
-    /**
-     * TOTAL MONTHLY OUTFLOW: Total of all employee salaries
-     *
-     * WHAT IT DOES: Sums all monthly salaries company pays
-     * USED FOR: Summary card showing total payroll cost per month
-     *
-     * HOW IT WORKS:
-     *   1. Check if employees array exists and has data
-     *   2. Loop through all employees
-     *   3. Add each employee's monthlySalary to running total
-     *   4. Return total sum
-     *
-     * EXAMPLE: If 3 employees earn R20k, R25k, R30k = R75k total
-     */
     totalMonthlyOutflow() {
-      if (!this.employees || this.employees.length === 0) return 0;
       return this.employees.reduce(
-        (accumulator, item) => accumulator + (item.monthlySalary || 0),
+        (sum, emp) => sum + (Number(emp.monthlySalary) || 0),
         0,
       );
     },
 
-    /**
-     * ANNUAL PAYROLL PROJECTION: Estimated yearly payroll
-     *
-     * WHAT IT DOES: Multiplies monthly payroll by 12 for annual estimate
-     * USED FOR: Summary card showing annual payroll cost
-     *
-     * CALCULATION: Total Monthly Outflow × 12 months = Annual Total
-     *
-     * EXAMPLE: If monthly = R75k, annual = R900k
-     */
+    totalCompanyDeductions() {
+      return Math.round(this.totalMonthlyOutflow * 0.15);
+    },
+
     annualPayrollProjection() {
       return this.totalMonthlyOutflow * 12;
     },
+
+    totalMonthlyPayroll() {
+      return this.totalMonthlyOutflow;
+    },
   },
 
+  mounted() {
+    this.fetchPayrollData();
+  },
   methods: {
-    /**
-     * GET INITIALS: Extract first letters from employee name
-     *
-     * WHAT IT DOES: Gets first letter of first and last name
-     * USED FOR: Avatar display (e.g., "JD" for "John Doe")
-     *
-     * HOW IT WORKS:
-     *   1. Split name by spaces
-     *   2. Get first letter of each word
-     *   3. Join together and make uppercase
-     *
-     * EXAMPLE:
-     *   "John Doe" → ["John", "Doe"] → ["J", "D"] → "JD"
-     */
-    getInitials(fullName) {
-      if (!fullName) return "";
-      return fullName
-        .split(" ")
-        .map((segment) => segment[0])
-        .join("")
-        .toUpperCase();
-    },
-
-    /**
-     * SET ACTIVE EMPLOYEE: Selects an employee and shows their payslip
-     *
-     * WHAT IT DOES: Updates selectedEmployee when clicked from list
-     * CALLED: When user clicks on an employee in left panel
-     *
-     * HOW IT WORKS:
-     *   1. Set selectedEmployee to the clicked employee
-     *   2. Clear salary increase field (reset form)
-     *
-     * This updates the right panel to show payslip for selected employee
-     */
-    setActiveEmployee(employee) {
-      this.selectedEmployee = employee;
-      this.salaryIncreasePercentage = null;
-    },
-
-    /**
-     * CALCULATE UIF: Unemployment Insurance Fund deduction
-     *
-     * WHAT IT DOES: Calculates 1% UIF deduction from salary
-     * HOW IT WORKS: grossSalary × 0.01 = UIF amount
-     *
-     * EXAMPLE: R 50,000 × 0.01 = R 500 UIF deduction
-     *
-     * NOTE: This is South African deduction
-     */
-    calculateUIF(grossSalary) {
-      return Math.round(grossSalary * 0.01);
-    },
-
-    /**
-     * CALCULATE PENSION: Pension Fund contribution
-     *
-     * WHAT IT DOES: Calculates 7.5% pension fund deduction
-     * HOW IT WORKS: grossSalary × 0.075 = Pension amount
-     *
-     * EXAMPLE: R 50,000 × 0.075 = R 3,750 pension deduction
-     *
-     * NOTE: Employee's contribution to retirement fund
-     */
-    calculatePension(grossSalary) {
-      return Math.round(grossSalary * 0.075);
-    },
-
-    /**
-     * CALCULATE MEDICAL AID: Health insurance contribution
-     *
-     * WHAT IT DOES: Calculates 2% medical aid deduction
-     * HOW IT WORKS: grossSalary × 0.02 = Medical amount
-     *
-     * EXAMPLE: R 50,000 × 0.02 = R 1,000 medical deduction
-     *
-     * NOTE: Employee's share of health benefits
-     */
-    calculateMedicalAid(grossSalary) {
-      return Math.round(grossSalary * 0.02);
-    },
-
-    /**
-     * CALCULATE PAYE: Personal income tax estimation
-     *
-     * WHAT IT DOES: Estimates PAYE (income tax) using tax brackets
-     * HOW IT WORKS: Uses tiered tax rates based on salary
-     *
-     * TAX BRACKETS (South African model):
-     *   - Over R40,000: 25% tax rate
-     *   - R25,000 to R40,000: 18% tax rate
-     *   - Under R25,000: 10% tax rate
-     *
-     * EXAMPLES:
-     *   R 50,000 × 0.25 = R 12,500 PAYE
-     *   R 30,000 × 0.18 = R 5,400 PAYE
-     *   R 15,000 × 0.10 = R 1,500 PAYE
-     *
-     * NOTE: This is simplified estimation, real PAYE is more complex
-     */
-    calculatePAYE(grossSalary) {
-      if (grossSalary > 40000) {
-        return Math.round(grossSalary * 0.25);
-      } else if (grossSalary > 25000) {
-        return Math.round(grossSalary * 0.18);
-      } else {
-        return Math.round(grossSalary * 0.1);
-      }
-    },
-
-    /**
-     * CALCULATE TOTAL DEDUCTIONS: Sum of all deductions
-     *
-     * WHAT IT DOES: Adds up all deductions from salary
-     * HOW IT WORKS: UIF + PAYE + Pension + Medical = Total Deductions
-     *
-     * FORMULA: All deduction methods called and summed
-     *
-     * EXAMPLE:
-     *   UIF (500) + PAYE (12,500) + Pension (3,750) + Medical (1,000)
-     *   = R 17,750 total deductions
-     */
-    calculateTotalDeductions(grossSalary) {
+    getApiUrl() {
       return (
-        this.calculateUIF(grossSalary) +
-        this.calculatePAYE(grossSalary) +
-        this.calculatePension(grossSalary) +
-        this.calculateMedicalAid(grossSalary)
+        import.meta.env.VITE_API_URL ||
+        "http://localhost/lca-php/moderntech-hr-system/backend/routes/payroll.php"
       );
     },
 
-    /**
-     * CALCULATE NET PAY: Final take-home salary
-     *
-     * WHAT IT DOES: Calculates what employee actually receives
-     * HOW IT WORKS: Gross Salary - Total Deductions = Net Pay
-     *
-     * FORMULA: grossSalary - calculateTotalDeductions(grossSalary)
-     *
-     * EXAMPLE:
-     *   R 50,000 (gross) - R 17,750 (deductions) = R 32,250 (net pay)
-     *
-     * This is what gets deposited to employee's bank account
-     */
-    calculateNetPay(grossSalary) {
-      return grossSalary - this.calculateTotalDeductions(grossSalary);
+    formatDate(dateString) {
+      if (!dateString) return "N/A";
+      const date = new Date(dateString);
+      return date.toLocaleDateString("en-ZA", {
+        year: "numeric",
+        month: "short",
+        day: "numeric",
+      });
     },
 
-    /**
-     * APPLY LOCAL SALARY INCREASE: Updates salary with percentage increase
-     *
-     * WHAT IT DOES: Simulates a salary increase for selected employee
-     * CALLED: When user clicks "Simulate Local Annual Increase" button
-     *
-     * VALIDATION FLOW:
-     *   1. Clear previous error/success messages
-     *   2. Check if employee is selected
-     *   3. Check if percentage is entered
-     *   4. Check if percentage is positive (> 0)
-     *   5. Check if percentage doesn't exceed 100
-     *   6. Check if value is a valid number
-     *
-     * If all checks pass:
-     *   7. Set isProcessing = true (disable button, show "Processing...")
-     *   8. Find employee in employees array by ID
-     *   9. Calculate new salary: oldSalary + (oldSalary × percentage ÷ 100)
-     *   10. Update employee's monthlySalary in both array and selectedEmployee
-     *   11. Show success message with new salary
-     *   12. Auto-hide success message after 4 seconds
-     *   13. Clear input field
-     *   14. Set isProcessing = false (enable button again)
-     *
-     * IMPORTANT: This updates the central employees array, so all views
-     * see the change and App.vue's watch saves to localStorage
-     *
-     * EXAMPLE:
-     * If salary = R50,000 and increase = 5%
-     * New salary = 50,000 + (50,000 × 5 ÷ 100) = R52,500
-     */
-    applyLocalSalaryIncrease() {
-      // RESET: Clear any previous messages
+    formatCurrency(amount) {
+      return "R" + Number(amount || 0).toLocaleString();
+    },
+
+    // --- TEMPLATE HELPER METHODS ---
+    getInitials(name) {
+      if (!name) return "??";
+      return name
+        .split(" ")
+        .map((word) => word[0])
+        .join("")
+        .toUpperCase()
+        .slice(0, 2);
+    },
+
+    calculateUIF(salary) {
+      const val = Number(salary) || 0;
+      return Math.round(val * 0.01).toLocaleString();
+    },
+
+    calculatePAYE(salary) {
+      const val = Number(salary) || 0;
+      let tax = 0;
+      if (val > 20000) tax = val * 0.18;
+      else if (val > 10000) tax = val * 0.12;
+      else tax = val * 0.05;
+      return Math.round(tax).toLocaleString();
+    },
+
+    calculatePension(salary) {
+      const val = Number(salary) || 0;
+      return Math.round(val * 0.075).toLocaleString();
+    },
+
+    calculateMedicalAid(salary) {
+      const val = Number(salary) || 0;
+      return Math.round(val * 0.02).toLocaleString();
+    },
+
+    calculateTotalDeductions(salary) {
+      const val = Number(salary) || 0;
+      const uif = val * 0.01;
+      const pension = val * 0.075;
+      const medical = val * 0.02;
+      let paye = 0;
+      if (val > 20000) paye = val * 0.18;
+      else if (val > 10000) paye = val * 0.12;
+      else paye = val * 0.05;
+
+      return Math.round(uif + paye + pension + medical).toLocaleString();
+    },
+
+    calculateNetPay(salary) {
+      const val = Number(salary) || 0;
+      const rawDeductions =
+        val * 0.01 +
+        val * 0.075 +
+        val * 0.02 +
+        (val > 20000 ? val * 0.18 : val > 10000 ? val * 0.12 : val * 0.05);
+
+      return Math.round(val - rawDeductions).toLocaleString();
+    },
+
+    // --- SELECTION & DATA FETCHING ---
+    setActiveEmployee(employee) {
+      this.selectEmployee(employee);
+    },
+
+    selectEmployee(employee) {
+      this.selectedEmployee = employee;
+      this.successMessage = "";
+      this.errorMessage = "";
+    },
+
+    parseSalary(value) {
+      if (!value) return 0;
+      // Strip non-numeric characters except decimals to handle formatting anomalies like "42000. 00"
+      const cleaned = String(value).replace(/[^0-9.]/g, "");
+      return parseFloat(cleaned) || 0;
+    },
+
+    async fetchPayrollData() {
+      try {
+        // Dynamically fetch from getApiUrl() (which returns payroll.php)
+        const response = await axios.get(this.getApiUrl());
+
+        if (response.data && response.data.status === "success") {
+          // Map data with sanitization
+          this.employees = response.data.data.map((emp) => ({
+            ...emp,
+            monthlySalary: this.parseSalary(emp.monthlySalary),
+            departmentName: this.getDepartmentName(emp.department),
+            jobRole:
+              emp.history && emp.history.length > 0
+                ? emp.history[0].reason.replace(/^Initial hire - /, "")
+                : emp.role,
+          }));
+
+          if (this.selectedEmployee) {
+            const current = this.employees.find(
+              (e) => e.id === this.selectedEmployee.id,
+            );
+            if (current) this.selectedEmployee = current;
+          } else if (this.employees.length > 0) {
+            this.selectedEmployee = this.employees[0];
+          }
+        }
+      } catch (error) {
+        console.error("Error fetching payroll data:", error);
+        this.errorMessage = "Failed to load employee payroll records.";
+      }
+    },
+    getDepartmentName(deptId) {
+      const departments = {
+        1: "Engineering",
+        2: "Quality Assurance",
+        3: "Customer Support",
+        4: "Human Resources",
+        5: "Sales",
+        6: "Marketing",
+      };
+      return departments[String(deptId)] || "General";
+    },
+
+    async applyLocalSalaryIncrease() {
       this.successMessage = "";
       this.errorMessage = "";
 
-      // VALIDATION 1: Check if employee is selected
       if (!this.selectedEmployee) {
-        this.errorMessage = "❌ Please select an employee first";
+        this.errorMessage = "❌ Please select an employee first.";
         return;
       }
 
-      // VALIDATION 2: Check if percentage field is filled
       if (
-        this.salaryIncreasePercentage === null ||
-        this.salaryIncreasePercentage === ""
+        !this.salaryIncreasePercentage ||
+        this.salaryIncreasePercentage <= 0
       ) {
-        this.errorMessage = "❌ Please enter a salary increase percentage";
+        this.errorMessage =
+          "❌ Please enter a valid percentage greater than 0%.";
         return;
       }
 
-      // VALIDATION 3: Check if percentage is positive
-      if (this.salaryIncreasePercentage <= 0) {
-        this.errorMessage = "❌ Percentage must be greater than 0%";
-        return;
-      }
-
-      // VALIDATION 4: Check if percentage doesn't exceed 100
-      if (this.salaryIncreasePercentage > 100) {
-        this.errorMessage = "❌ Salary increase cannot exceed 100%";
-        return;
-      }
-
-      // VALIDATION 5: Check if value is a valid number
-      if (!Number.isFinite(this.salaryIncreasePercentage)) {
-        this.errorMessage = "❌ Please enter a valid number";
-        return;
-      }
-
-      // ALL VALIDATIONS PASSED - Proceed with update
-      // Set processing state (disables button, shows "Processing...")
       this.isProcessing = true;
 
-      // SIMULATE API CALL: Wait 300ms for better UX
-      setTimeout(() => {
-        // FIND EMPLOYEE: Search employees array for matching ID
-        const targetedIndex = this.employees.findIndex(
-          (emp) => emp.id === this.selectedEmployee.id,
-        );
+      try {
+        const currentSalary = Number(this.selectedEmployee.monthlySalary) || 0;
+        const increaseAmount =
+          currentSalary * (this.salaryIncreasePercentage / 100);
+        const newSalarySum = Math.round(currentSalary + increaseAmount);
 
-        // UPDATE IF FOUND
-        if (targetedIndex !== -1) {
-          // STORE ORIGINAL SALARY: For calculation
-          const historicalSalary = this.employees[targetedIndex].monthlySalary;
+        const response = await axios.post(this.getApiUrl(), {
+          employee_id: this.selectedEmployee.id,
+          new_salary: newSalarySum,
+          increase_percentage: this.salaryIncreasePercentage,
+          reason: `Annual Increase (${this.salaryIncreasePercentage}%)`,
+        });
 
-          // CALCULATE INCREASE AMOUNT: percentage of original salary
-          const totalCalculatedIncrease =
-            historicalSalary * (this.salaryIncreasePercentage / 100);
-
-          // CALCULATE NEW SALARY: original + increase
-          const updatedSalarySum = Math.round(
-            historicalSalary + totalCalculatedIncrease,
-          );
-
-          // UPDATE BOTH LOCATIONS
-          // 1. Update in central employees array
-          this.employees[targetedIndex].monthlySalary = updatedSalarySum;
-          // 2. Update in local selectedEmployee (for right panel display)
-          this.selectedEmployee.monthlySalary = updatedSalarySum;
-
-          // SHOW SUCCESS MESSAGE: Tells user what happened
-          // Auto-hides after 4 seconds
-          this.successMessage = `✅ ${this.selectedEmployee.name}'s salary updated to R${updatedSalarySum} (${this.salaryIncreasePercentage}% increase)`;
-
-          // AUTO-HIDE SUCCESS MESSAGE
-          setTimeout(() => {
-            this.successMessage = "";
-          }, 4000);
-
-          // CLEAR INPUT FIELD
+        if (response.data && response.data.status === "success") {
+          this.successMessage = `✅ Salary updated for ${this.selectedEmployee.name}!`;
           this.salaryIncreasePercentage = null;
+          await this.fetchPayrollData();
+        } else {
+          this.errorMessage =
+            response.data.message || "Failed to update salary.";
         }
-
-        // STOP PROCESSING: Re-enable button
+      } catch (error) {
+        console.error("Error updating salary:", error);
+        this.errorMessage = "❌ Server error occurred while updating salary.";
+      } finally {
         this.isProcessing = false;
-      }, 300);
+      }
+    },
+
+    printPayslip() {
+      if (!this.selectedEmployee) return;
+      window.print();
     },
   },
 };
 </script>
-
 <style scoped>
 /* ============ MAIN PAYROLL PAGE ============ */
 /* Dark background, full viewport height */
@@ -826,17 +708,21 @@ export default {
   border: 1px solid #222222;
   border-radius: 20px;
   padding: 25px;
-  height: 600px;
+  /* FIX: Change fixed height: 600px to min-height and enable scrolling */
+  min-height: 600px;
+  max-height: 85vh;
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
 }
 
-/* PANEL HEADING: Title of each panel */
-.panel-heading {
-  font-size: 1.1rem;
-  color: #ffffff;
-  margin-bottom: 15px;
-  font-weight: bold;
+/* Add custom scrollbar styling for the right panel */
+.right-panel::-webkit-scrollbar {
+  width: 6px;
+}
+.right-panel::-webkit-scrollbar-thumb {
+  background: #222222;
+  border-radius: 4px;
 }
 
 /* ============ EMPLOYEE LIST SEARCH ============ */
@@ -1218,5 +1104,68 @@ export default {
   .right-panel {
     height: auto;
   }
+}
+.salary-history-section {
+  margin-top: 15px;
+}
+
+.history-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 120px;
+  overflow-y: auto;
+}
+
+.history-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: #0b0f19;
+  border: 1px solid #1f2937;
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-size: 0.85rem;
+}
+
+.history-main-info {
+  display: flex;
+  flex-direction: column;
+}
+
+.history-date {
+  color: #9ca3af;
+  font-size: 0.75rem;
+}
+
+.history-reason {
+  color: #ffffff;
+}
+
+.history-amounts {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.history-old {
+  color: #6b7280;
+  text-decoration: line-through;
+}
+
+.history-badge {
+  background: rgba(68, 255, 154, 0.15);
+  color: #44ff9a;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  font-weight: bold;
+}
+
+.history-empty {
+  color: #6b7280;
+  font-size: 0.85rem;
+  font-style: italic;
+  padding: 5px 0;
 }
 </style>

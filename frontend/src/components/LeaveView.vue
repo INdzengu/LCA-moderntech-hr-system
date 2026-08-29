@@ -1,6 +1,5 @@
 <template>
   <div class="leave-page">
-    
     <section class="header">
       <p class="directory">MANAGEMENT</p>
       <h1>Leave Track</h1>
@@ -12,12 +11,12 @@
         <p class="stat-label">Total Employees on Leave</p>
         <p class="stat-number">{{ totalOnLeave }}</p>
       </div>
-      
+
       <div class="stat-card">
         <p class="stat-label">Pending Approval</p>
         <p class="stat-number pink-text">{{ pendingApprovals }}</p>
       </div>
-      
+
       <div class="stat-card">
         <p class="stat-label">Most Common Type</p>
         <p class="stat-number green-text">Sick</p>
@@ -35,7 +34,6 @@
     </section>
 
     <div class="timeline-container">
-      
       <div class="timeline-section">
         <div class="section-title">
           <span class="dot pending-dot">●</span> Awaiting Your Action
@@ -52,7 +50,7 @@
         <div v-if="pendingRequests.length === 0" class="empty-msg">
           No pending requests
         </div>
-        
+
         <div
           v-for="item in pendingRequests"
           :key="item.employeeId + '-' + item.type"
@@ -64,7 +62,7 @@
           </div>
           <div class="leave-type">{{ item.type }} Leave</div>
           <div class="leave-days">{{ item.days }} days</div>
-          
+
           <div class="action-buttons">
             <button
               class="view-btn"
@@ -73,7 +71,7 @@
             >
               👁
             </button>
-            
+
             <button
               class="approve-btn"
               title="Approve"
@@ -81,7 +79,7 @@
             >
               ✓
             </button>
-            
+
             <button
               class="reject-btn"
               title="Reject"
@@ -109,7 +107,7 @@
         <div v-if="approvedRequests.length === 0" class="empty-msg">
           No approved requests
         </div>
-        
+
         <div
           v-for="item in approvedRequests"
           :key="item.employeeId + '-' + item.type"
@@ -150,7 +148,7 @@
         <div v-if="rejectedRequests.length === 0" class="empty-msg">
           No rejected requests
         </div>
-        
+
         <div
           v-for="item in rejectedRequests"
           :key="item.employeeId + '-' + item.type"
@@ -210,7 +208,9 @@
 
           <div class="info-row">
             <span class="info-label">Duration</span>
-            <span class="info-value text-highlight">{{ selectedRequest.days }} Days</span>
+            <span class="info-value text-highlight"
+              >{{ selectedRequest.days }} Days</span
+            >
           </div>
 
           <div class="info-row">
@@ -236,17 +236,16 @@
 </template>
 
 <script>
+import axios from "axios";
+
 export default {
   name: "LeaveView",
-  
-  // PROPS: Communications sent down from App.vue parent component
+
   props: {
     currentUser: {
       type: String,
       required: true,
     },
-    // CENTRAL SHARED EMPLOYEES LINK: Direct pointer mapping straight to global state.
-    // Any mutation applied here instantly updates other sub-view routes tracking this data source.
     employees: {
       type: Array,
       required: true,
@@ -255,111 +254,103 @@ export default {
 
   data() {
     return {
-      // INTERACTION STATES: Monitors search filter strings and tracking selections for the layout popups
       search: "",
       isModalOpen: false,
-      selectedRequest: null, // Holds object references parsed to populate the details modal preview frame
+      selectedRequest: null,
+      dbLeaveRequests: [],
+      loading: false,
     };
   },
 
+  mounted() {
+    this.fetchLeaveRequests();
+  },
+
   computed: {
-    /**
-     * ALL REQUESTS FLATTENING FUNCTION
-     * * WHAT IT DOES: Iterates through nesting levels of arrays to return an organized single-level flat structure.
-     * * WHY WE NEED IT: Employee arrays hold sub-arrays for requests. This structures everything cleanly for table lookups.
-     * * HOW FILTER SEARCH WORKS: It inspects employee names against search field strings before loading objects into the stack.
-     */
     allRequests() {
-      let list = [];
-      this.employees.forEach((employee) => {
-        if (employee.leaveRequests && employee.leaveRequests.length > 0) {
-          employee.leaveRequests.forEach((request) => {
-            // Checks to see if typing matches string patterns inside the text input box
-            if (
-              employee.name.toLowerCase().includes(this.search.toLowerCase())
-            ) {
-              list.push({
-                employeeId: employee.id,
-                name: employee.name,
-                type: request.type,
-                days: request.days,
-                status: request.status,
-                reason: request.reason,
-                dateSubmitted: request.dateSubmitted || "N/A",
-                startDate: request.startDate || "N/A",
-                endDate: request.endDate || "N/A",
-              });
-            }
-          });
-        }
-      });
-      return list;
+      if (!this.dbLeaveRequests || this.dbLeaveRequests.length === 0) return [];
+
+      return this.dbLeaveRequests
+        .filter((item) => {
+          const empName = item.name ? item.name.toLowerCase() : "";
+          return empName.includes(this.search.toLowerCase());
+        })
+        .map((item) => ({
+          ...item,
+          employeeId: item.employee_id || item.employeeId,
+        }));
     },
 
-    // FILTER FEED METHODS: Subdivide our main flat array list into specific status segments
     pendingRequests() {
       return this.allRequests.filter((req) => req.status === "Pending");
     },
+
     approvedRequests() {
       return this.allRequests.filter((req) => req.status === "Approved");
     },
+
     rejectedRequests() {
-      return this.allRequests.filter((req) => req.status === "Rejected");
+      return this.allRequests.filter(
+        (req) => req.status === "Rejected" || req.status === "Denied",
+      );
     },
 
-    // TOP COUNTER STATISTICS BLOCKS CALCULATORS
     totalOnLeave() {
-      // Grabs items matching approved flags to determine total headcount away from the office
       return this.allRequests.filter((req) => req.status === "Approved").length;
     },
+
     pendingApprovals() {
-      // Keeps score tracker totals for items requiring immediate attention inside Dashboard indicators
       return this.allRequests.filter((req) => req.status === "Pending").length;
     },
   },
 
   methods: {
-    /**
-     * ACTION UPDATE HANDLER SYSTEM
-     * * WHAT IT DOES: Updates processing flags for leave statuses and syncs employee work availability.
-     * * CENTRAL TIMELINE PIPELINE:
-     * 1. Uses the ID parameter to point directly to the modified employee object map inside the main layout list.
-     * 2. Pinpoints the matching leaf node request array tracking that targeted leave type.
-     * 3. Alters the status string flag (Pending changes to Approved or Rejected based on choice clicked).
-     * 4. APP-WIDE REACTION: If approved, updates employee.status to "On Leave". If rejected, resets back to "Active".
-     * 5. APPVUE LOCAL STORAGE SYNC: App.vue senses this adjustment, autosaving changes across localStorage instantly.
-     */
-    updateLeaveStatus(employeeId, requestType, newStatus) {
-      const employee = this.employees.find((emp) => emp.id === employeeId);
+    getApiUrl() {
+      return "http://localhost/lca-php/moderntech-hr-system/backend/routes/leave.php";
+    },
 
-      if (employee && employee.leaveRequests) {
-        const request = employee.leaveRequests.find(
-          (req) => req.type === requestType,
-        );
-
-        if (request) {
-          // Adjust status text value dynamically
-          request.status = newStatus;
-
-          // Toggle global system work status flags depending on selection choice action
-          if (newStatus === "Approved") {
-            employee.status = "On Leave";
-          } else if (newStatus === "Rejected") {
-            employee.status = "Active";
-          }
-
-          console.log(
-            `✓ Leave request updated: ${employee.name} - ${requestType} - ${newStatus}`,
-          );
+    async fetchLeaveRequests() {
+      this.loading = true;
+      try {
+        const response = await axios.get(this.getApiUrl());
+        if (response.data && response.data.status === "success") {
+          this.dbLeaveRequests = response.data.data;
         }
+      } catch (error) {
+        console.error("Error fetching leave requests from database:", error);
+      } finally {
+        this.loading = false;
       }
     },
 
-    /**
-     * AVATAR NAME FORMATTING STRIPPER
-     * * WHAT IT DOES: Converts full user string lines to neat short initial uppercase symbols.
-     * INPUT EXAMPLE: "Sarah Mitchell" → "SM"
-     */
+    async updateLeaveStatus(employeeId, requestType, newStatus) {
+      const targetRequest = this.allRequests.find(
+        (req) =>
+          req.employeeId === employeeId &&
+          req.type === requestType &&
+          req.status === "Pending",
+      );
+
+      if (!targetRequest) {
+        console.error("Target leave request not found in state.");
+        return;
+      }
+
+      try {
+        const response = await axios.post(this.getApiUrl(), {
+          request_id: targetRequest.request_id,
+          status: newStatus,
+        });
+
+        if (response.data && response.data.status === "success") {
+          await this.fetchLeaveRequests();
+        }
+      } catch (error) {
+        console.error("Failed to update leave request status:", error);
+        alert("Could not update leave status in the database.");
+      }
+    },
+
     initials(name) {
       if (!name) return "";
       return name
@@ -369,14 +360,11 @@ export default {
         .toUpperCase();
     },
 
-    /**
-     * MODAL TOGGLE WINDOW ACTIONS
-     * Loads selected object data into active focus view state loops and prompts display visibility
-     */
     showLeaveDetails(item) {
       this.selectedRequest = item;
       this.isModalOpen = true;
     },
+
     closeModal() {
       this.isModalOpen = false;
       this.selectedRequest = null;
@@ -384,7 +372,6 @@ export default {
   },
 };
 </script>
-
 <style scoped>
 /* Page layout styles built for matching app standard spacing configurations */
 .leave-page {
@@ -846,4 +833,3 @@ export default {
   }
 }
 </style>
-

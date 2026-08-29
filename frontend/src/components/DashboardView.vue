@@ -83,7 +83,7 @@
       <div class="chart-panel">
         <div class="panel-header">
           <h3>Weekly Attendance Trend</h3>
-          <span class="panel-legend">June Past Week Overview</span>
+          <span class="panel-legend">Current Week Overview</span>
         </div>
 
         <!-- BAR CHART CONTAINER: Main chart area -->
@@ -233,410 +233,121 @@
 </template>
 
 <script>
+import axios from "axios";
+
 export default {
   name: "DashboardView",
 
   props: {
-    // CURRENT USER: Name of logged-in user
-    // Passed from App.vue - shows who is using the dashboard
     currentUser: {
       type: String,
       default: "HR Admin",
     },
-
-    // EMPLOYEES: Array of all employees in the system
-    // Passed from App.vue - this is the main data source
-    // All computed properties below use this array
-    // When employees array changes, all computed properties update automatically
     employees: {
       type: Array,
-      required: true,
+      default: () => [],
     },
   },
 
+  data() {
+    return {
+      metrics: {
+        total_employees: 0,
+        employees_present: 0,
+        employees_on_leave: 0,
+        pending_approvals: 0,
+        weekly_attendance: [],
+        department_breakdown: [],
+        activity_log: [],
+      },
+      loading: false,
+    };
+  },
+
+  mounted() {
+    this.fetchDashboardData();
+  },
+
   computed: {
-    /**
-     * TOTAL EMPLOYEES COUNT
-     *
-     * WHAT IT DOES: Counts all employees in the system
-     * HOW IT WORKS: Returns length of employees array
-     * WHERE IT'S USED: Stat box showing total employees
-     *
-     * AUTOMATIC UPDATE: If employees array changes (employee added/removed),
-     * this count updates automatically - that's what computed properties do
-     */
     totalEmployees() {
-      return this.employees.length;
+      return this.metrics.total_employees;
     },
 
-    /**
-     * EMPLOYEES ON LEAVE
-     *
-     * WHAT IT DOES: Counts how many employees have "On Leave" status
-     * HOW IT WORKS:
-     *   1. filter() loops through employees array
-     *   2. Checks each employee's status property
-     *   3. Keeps only employees where status === "On Leave"
-     *   4. Returns count of matching employees
-     *
-     * WHERE IT'S USED: Stat box showing employees on leave
-     *
-     * WHEN IT UPDATES: When HR approves a leave request in LeaveView,
-     * that employee's status changes to "On Leave", this count updates
-     */
-    employeesOnLeave() {
-      return this.employees.filter((emp) => emp.status === "On Leave").length;
-    },
-
-    /**
-     * EMPLOYEES PRESENT TODAY
-     *
-     * WHAT IT DOES: Calculates how many employees are actually working
-     * HOW IT WORKS:
-     *   Total employees - Employees on leave - Employees absent = Present today
-     *
-     * WHERE IT'S USED: Stat box showing employees present
-     *
-     * EXAMPLE:
-     * If total = 15, on leave = 2, absent = 1
-     * Then present = 15 - 2 - 1 = 12
-     *
-     * UPDATES: When leave is approved or when attendance status changes
-     */
     employeesPresent() {
-      return (
-        this.employees.length -
-        this.employeesOnLeave -
-        this.employees.filter((emp) => emp.status === "Absent").length
-      );
+      return this.metrics.employees_present;
     },
 
-    /**
-     * PENDING LEAVE REQUESTS COUNT
-     *
-     * WHAT IT DOES: Counts how many leave requests are waiting for approval
-     * HOW IT WORKS:
-     *   1. Loop through all employees (forEach)
-     *   2. For each employee, check if they have leaveRequests array
-     *   3. Count only requests with status === "Pending"
-     *   4. Add to total count
-     *
-     * WHERE IT'S USED: Stat box showing pending approvals
-     *
-     * UPDATES: When HR approves or rejects a leave request in LeaveView,
-     * the request status changes from "Pending" to "Approved" or "Rejected",
-     * so this count changes automatically
-     */
+    employeesOnLeave() {
+      return this.metrics.employees_on_leave;
+    },
+
     pendingLeaveCount() {
-      let count = 0;
-      this.employees.forEach((emp) => {
-        if (emp.leaveRequests && emp.leaveRequests.length > 0) {
-          count += emp.leaveRequests.filter(
-            (r) => r.status === "Pending",
-          ).length;
-        }
-      });
-      return count;
+      return this.metrics.pending_approvals;
     },
 
-    /**
-     * WEEKLY ATTENDANCE DATA
-     *
-     * WHAT IT DOES: Processes attendance for each day of the week
-     * Creates data for the attendance bar chart
-     *
-     * HOW IT WORKS:
-     *   1. Create array of 5 weekdays (Mon-Fri, June 15-19)
-     *   2. For each day, count employees who were "present" or "late"
-     *   3. Calculate percentage for bar height (present / total * 100)
-     *   4. Return array with all day data
-     *
-     * WHERE IT'S USED: Powers the bar chart visualization
-     *
-     * RETURNS: Array like this:
-     * [
-     *   { label: "Mon 15", present: 13, percentage: 87 },
-     *   { label: "Tue 16", present: 14, percentage: 93 },
-     *   ...
-     * ]
-     *
-     * DATA SOURCE: Uses prevWeekAttendance property from each employee
-     * This property contains attendance status for each date
-     */
     weeklyAttendanceData() {
-      // DEFINE WEEK DAYS: Monday through Friday of June 15-19
-      // These are the dates we're showing attendance for
-      const weekDays = [
-        { date: "2026-06-15", label: "Mon 15" },
-        { date: "2026-06-16", label: "Tue 16" },
-        { date: "2026-06-17", label: "Wed 17" },
-        { date: "2026-06-18", label: "Thu 18" },
-        { date: "2026-06-19", label: "Fri 19" },
-      ];
-
-      // MAP OVER WEEK DAYS: Create attendance data for each day
-      // map() transforms weekDays array into attendance data array
-      return weekDays.map((day) => {
-        // COUNT EMPLOYEES PRESENT OR LATE: Loop through all employees
-        let presentCount = 0;
-
-        this.employees.forEach((emp) => {
-          // GET ATTENDANCE FOR THIS DATE: Look up status for this specific date
-          // emp.prevWeekAttendance is an object like: { "2026-06-15": "present", ... }
-          const status = emp.prevWeekAttendance?.[day.date];
-
-          // COUNT AS PRESENT: Only count "present" or "late" employees
-          // Don't count "absent" or "leave" (those don't count as present)
-          if (status === "present" || status === "late") {
-            presentCount++;
-          }
-        });
-
-        // CALCULATE PERCENTAGE FOR BAR HEIGHT
-        // Percentage = (present employees / total employees) * 100
-        // This percentage becomes the bar height (0% to 100%)
-        return {
-          label: day.label,
-          present: presentCount,
-          percentage: (presentCount / this.employees.length) * 100,
-        };
-      });
+      return this.metrics.weekly_attendance || [];
     },
 
-    /**
-     * MAXIMUM ATTENDANCE VALUE
-     *
-     * WHAT IT DOES: Returns the highest possible attendance number
-     * HOW IT WORKS: Returns total number of employees
-     * WHERE IT'S USED: Y-axis scale on bar chart
-     *
-     * EXAMPLE:
-     * If 15 employees total, maxAttendance = 15
-     * Y-axis shows: 15, 11, 8, 0
-     * (These scale marks help read the chart)
-     */
     maxAttendance() {
-      return this.employees.length;
+      return this.totalEmployees > 0 ? this.totalEmployees : 10;
     },
 
-    /**
-     * DEPARTMENT BREAKDOWN
-     *
-     * WHAT IT DOES: Groups employees by department and counts each group
-     * Creates data for the pie chart legend
-     *
-     * HOW IT WORKS:
-     *   1. Define colors for each department (color coding)
-     *   2. Create empty object to store departments
-     *   3. Loop through all employees
-     *   4. For each employee, add them to their department group
-     *   5. Count how many employees in each department
-     *   6. Sort departments by size (largest first)
-     *
-     * WHERE IT'S USED: Pie chart legend and pieChartStyle calculation
-     *
-     * RETURNS: Array like this:
-     * [
-     *   { name: "Software Development", count: 5, color: "#3b82f6" },
-     *   { name: "Quality Assurance", count: 2, color: "#8b5cf6" },
-     *   ...
-     * ]
-     *
-     * Sorted from most employees to least employees
-     */
     departmentBreakdown() {
-      // DEPARTMENT COLORS: Assign consistent color to each department
-      // These colors are used in pie chart and legend
-      const departmentColors = {
-        "Software Development": "#3b82f6", // Blue
-        "Quality Assurance": "#8b5cf6", // Purple
-        "Customer Support": "#10b981", // Green
-        "Human Resources": "#06b6d4", // Cyan
-        Sales: "#f59e0b", // Amber
-        Marketing: "#ef4444", // Red
-      };
-
-      // GROUP EMPLOYEES BY DEPARTMENT
-      // Create empty object to store department data
-      const departments = {};
-
-      // LOOP THROUGH ALL EMPLOYEES: Add each to their department group
-      this.employees.forEach((emp) => {
-        const dept = emp.department;
-
-        // CHECK IF DEPARTMENT ALREADY EXISTS
-        // If first time seeing this department, create it
-        if (!departments[dept]) {
-          departments[dept] = {
-            name: dept,
-            count: 0,
-            color: departmentColors[dept] || "#64748b",
-          };
-        }
-
-        // INCREMENT COUNT: Add this employee to department count
-        departments[dept].count++;
-      });
-
-      // CONVERT TO ARRAY AND SORT
-      // Object.values() converts department object into array
-      // sort() arranges by count (largest count first)
-      return Object.values(departments).sort((a, b) => b.count - a.count);
+      return this.metrics.department_breakdown || [];
     },
 
-    /**
-     * PIE CHART STYLE
-     *
-     * WHAT IT DOES: Generates CSS conic-gradient to create pie chart
-     * HOW IT WORKS:
-     *   1. Loop through each department
-     *   2. Calculate what percentage of employees are in that department
-     *   3. Create CSS gradient segment for that department
-     *   4. Combine all segments into one gradient string
-     *
-     * WHERE IT'S USED: :style binding on simulated-pie-circle div
-     * This converts the gradient string into a pie chart visualization
-     *
-     * CSS CONIC-GRADIENT EXPLANATION:
-     * Creates a circle divided into colored wedges/slices
-     * Each slice size = percentage of that department
-     *
-     * EXAMPLE OUTPUT:
-     * conic-gradient(
-     *   #3b82f6 0% 30%,        <- Blue slice from 0% to 30% of circle
-     *   #8b5cf6 30% 50%,       <- Purple slice from 30% to 50%
-     *   #10b981 50% 100%       <- Green slice from 50% to 100%
-     * )
-     *
-     * COOL PART: Entire pie chart is pure CSS - no chart library needed!
-     */
     pieChartStyle() {
-      // START GRADIENT STRING: Build the conic-gradient from scratch
+      if (!this.departmentBreakdown.length) {
+        return { background: "conic-gradient(#1c1c1c 0% 100%)" };
+      }
+
       let gradientString = "conic-gradient(";
       let currentPercentage = 0;
 
-      // LOOP THROUGH EACH DEPARTMENT: Create a segment for each
       this.departmentBreakdown.forEach((dept, index) => {
-        // CALCULATE PERCENTAGE FOR THIS DEPARTMENT
-        // percentage = (employees in dept / total employees) * 100
-        const percentage = (dept.count / this.employees.length) * 100;
-
-        // CALCULATE START AND END POSITIONS
-        // Where does this department's slice start and end in the circle?
+        const percentage = (dept.count / this.totalEmployees) * 100;
         const startPercentage = currentPercentage;
         const endPercentage = currentPercentage + percentage;
 
-        // ADD TO GRADIENT STRING
-        // Format: "color startPosition% endPosition%"
-        // Example: "#3b82f6 0% 30%"
         gradientString += `${dept.color} ${startPercentage}% ${endPercentage}%`;
 
-        // ADD COMMA BETWEEN SEGMENTS
-        // Comma separates each color segment
-        // Don't add comma after the last segment
         if (index < this.departmentBreakdown.length - 1) {
           gradientString += ",";
         }
-
-        // UPDATE CURRENT POSITION FOR NEXT SEGMENT
-        // Next segment starts where this one ends
         currentPercentage = endPercentage;
       });
 
-      // CLOSE GRADIENT STRING: Add closing parenthesis
       gradientString += ")";
-
-      // RETURN STYLE OBJECT: This gets applied as inline style
-      return {
-        background: gradientString,
-      };
+      return { background: gradientString };
     },
 
-    /**
-     * ACTIVITY LOG
-     *
-     * WHAT IT DOES: Creates list of recent activities from leave requests
-     * Shows approved and pending leave requests as system events
-     *
-     * HOW IT WORKS:
-     *   1. Create empty activities array
-     *   2. Loop through all employees
-     *   3. For each employee's leave request, create activity entry
-     *   4. Sort by most recent first (by date submitted)
-     *   5. Return sorted activity array
-     *
-     * WHERE IT'S USED: Powers the activity log table
-     *
-     * RETURNS: Array like this:
-     * [
-     *   {
-     *     id: "emp1-annual",
-     *     description: "Annual Leave Request Approved",
-     *     category: "Leave Management",
-     *     categoryClass: "tag-leave",
-     *     targetProfile: "John Doe (Software Developer)",
-     *     timestamp: "2026-06-24 • 08:14 AM"
-     *   },
-     *   ...
-     * ]
-     *
-     * DATA FLOW: Employee JSON → Computed Property → Table Display
-     * This demonstrates how data flows through the application
-     */
     activityLog() {
-      // CREATE EMPTY ACTIVITIES ARRAY: Will store all activities
-      const activities = [];
+      return this.metrics.activity_log || [];
+    },
+  },
 
-      // LOOP THROUGH ALL EMPLOYEES: Get their leave requests
-      this.employees.forEach((emp) => {
-        // CHECK IF EMPLOYEE HAS ANY LEAVE REQUESTS
-        // leaveRequests might be undefined, so check first
-        if (emp.leaveRequests && emp.leaveRequests.length > 0) {
-          // LOOP THROUGH EACH LEAVE REQUEST: Create activity for each
-          emp.leaveRequests.forEach((request) => {
-            // CREATE ACTIVITY ENTRY FOR THIS LEAVE REQUEST
-            activities.push({
-              // UNIQUE ID: Combines employee ID and request type
-              id: `${emp.id}-${request.type}`,
+  methods: {
+    getApiUrl() {
+      return "http://localhost/lca-php/moderntech-hr-system/backend/routes/dashboard.php";
+    },
 
-              // DESCRIPTION: What happened
-              // Changes based on status: "Approved", "Pending", "Rejected"
-              description:
-                request.status === "Approved"
-                  ? `${request.type} Leave Request Approved`
-                  : `${request.type} Leave Request ${request.status}`,
-
-              // CATEGORY: Type of activity (all leave requests are "Leave Management")
-              category: "Leave Management",
-
-              // CATEGORY CLASS: CSS class for color coding
-              // Used in :class binding to color the tag
-              categoryClass: "tag-leave",
-
-              // TARGET PROFILE: Shows which employee (name and role)
-              targetProfile: `${emp.name} (${emp.role})`,
-
-              // TIMESTAMP: When the activity happened
-              // Split by space to get just the date part for sorting
-              timestamp: `${request.dateSubmitted} • 08:14 AM`,
-            });
-          });
+    async fetchDashboardData() {
+      this.loading = true;
+      try {
+        const response = await axios.get(this.getApiUrl());
+        if (response.data && response.data.status === "success") {
+          this.metrics = response.data.data;
         }
-      });
-
-      // SORT BY MOST RECENT FIRST
-      // Sorts by date in timestamp string
-      // Most recent dates come first
-      return activities.sort(
-        (a, b) =>
-          new Date(b.timestamp.split(" ")[0]) -
-          new Date(a.timestamp.split(" ")[0]),
-      );
+      } catch (error) {
+        console.error("Failed to load dashboard data from database:", error);
+      } finally {
+        this.loading = false;
+      }
     },
   },
 };
 </script>
-
 <style scoped>
 /* ============ MAIN DASHBOARD PAGE CONTAINER ============ */
 /* This is the main wrapper for the entire dashboard */
