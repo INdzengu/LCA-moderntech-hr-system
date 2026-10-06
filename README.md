@@ -656,11 +656,9 @@ created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 ## Installation
 
 ### Step 1: Clone the Repository
-
-Clone the project from GitHub:
-
-git clone https://github.com/INdzengu/LCA-moderntech-hr-system-course2.git
-
+ git clone https://github.com/INdzengu/LCA-moderntech-hr-system.git
+       cd LCA-moderntech-hr-system
+       git checkout course2-project
 ### Step 2: Move the Project into XAMPP
 
 Copy the project folder into the XAMPP `htdocs` directory.
